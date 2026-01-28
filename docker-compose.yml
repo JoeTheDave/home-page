@@ -1,0 +1,11 @@
+# This docker-compose.yml is primarily used for ensuring shared PostgreSQL container
+# The actual PostgreSQL container is managed globally across all home-page projects
+
+services:
+  # Placeholder service - shared PostgreSQL container is managed via npm scripts
+  # to avoid conflicts between multiple projects
+  placeholder:
+    image: alpine:latest
+    command: echo "Using shared home-page-postgres container"
+    profiles:
+      - disabled
