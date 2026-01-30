@@ -13,11 +13,46 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Example model - you can modify or remove this
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String          @id @default(uuid())
+  email         String          @unique
+  name          String?
+  googleId      String?         @unique
+  picture       String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  bookmarks     Bookmark[]
+  groups        BookmarkGroup[]
+}
+
+model BookmarkGroup {
+  id        String     @id @default(uuid())
+  name      String
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deleted   Boolean    @default(false)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  bookmarks Bookmark[]
+
+  @@index([userId])
+  @@index([userId, deleted])
+}
+
+model Bookmark {
+  id        String         @id @default(uuid())
+  url       String
+  name      String
+  image     String
+  orderId   Int            @default(0)
+  deleted   Boolean        @default(false)
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  groupId   String
+  group     BookmarkGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@index([userId])
+  @@index([groupId, deleted, orderId])
 }
