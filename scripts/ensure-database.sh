@@ -2,7 +2,7 @@
 
 # Ensure project database exists in shared PostgreSQL container
 DATABASE_NAME="home_page_dev"
-CONTAINER_NAME="home-page-postgres"
+CONTAINER_NAME="raise-the-bones-postgres"
 
 echo "📊 Ensuring database '$DATABASE_NAME' exists..."
 

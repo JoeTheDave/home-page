@@ -44,6 +44,7 @@ function App() {
   const [groupFormData, setGroupFormData] = useState({ name: "" });
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showMoveToSubmenu, setShowMoveToSubmenu] = useState(false);
   const [toast, setToast] = useState<{
     message: string;
     bookmarkId: string;
@@ -57,6 +58,7 @@ function App() {
     image: null as File | null,
   });
   const [imagePreview, setImagePreview] = useState<string>("");
+  const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const baseUrl = import.meta.env.DEV ? "http://localhost:3001" : "";
@@ -82,6 +84,7 @@ function App() {
     const handleClick = () => {
       setContextMenu(null);
       setShowUserMenu(false);
+      setShowMoveToSubmenu(false);
     };
     document.addEventListener("click", handleClick);
     return () => document.removeEventListener("click", handleClick);
@@ -201,6 +204,7 @@ function App() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSaving(true);
 
     const formDataToSend = new FormData();
     formDataToSend.append("url", formData.url);
@@ -229,6 +233,8 @@ function App() {
       }
     } catch (error) {
       console.error("Failed to save bookmark:", error);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -555,9 +561,9 @@ function App() {
 
         {/* Bookmarks Grid */}
         <div
-          className="grid gap-6"
+          className="grid gap-6 justify-center"
           style={{
-            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 180px))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 180px))",
           }}
         >
           {bookmarks.map((bookmark, index) => (
@@ -584,7 +590,7 @@ function App() {
                         : `${baseUrl}${bookmark.image}`
                     }
                     alt={bookmark.name}
-                    className="w-full h-full object-cover rounded-xl"
+                    className="w-full h-full object-contain rounded-xl"
                   />
                 ) : (
                   <div className="w-full h-full bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center">
@@ -629,7 +635,7 @@ function App() {
         {/* Context Menu */}
         {contextMenu && (
           <div
-            className="fixed bg-white rounded-lg shadow-xl py-2 z-50"
+            className="fixed bg-white rounded-lg shadow-xl py-2 z-50 min-w-[150px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -642,6 +648,49 @@ function App() {
             >
               Edit
             </button>
+            <div className="relative">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowMoveToSubmenu(!showMoveToSubmenu);
+                }}
+                className="w-full px-6 py-2 text-left hover:bg-gray-100 transition-colors flex items-center justify-between"
+              >
+                <span>Move To</span>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+              {showMoveToSubmenu && (
+                <div className="absolute left-full top-0 ml-1 bg-white rounded-lg shadow-xl py-2 min-w-[150px]">
+                  {groups.filter(g => g.id !== contextMenu.bookmark.groupId).map(group => (
+                    <button
+                      key={group.id}
+                      onClick={async () => {
+                        try {
+                          const response = await fetch(`${baseUrl}/api/bookmarks/${contextMenu.bookmark.id}/move`, {
+                            method: 'PATCH',
+                            credentials: 'include',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ groupId: group.id })
+                          });
+                          if (response.ok) {
+                            fetchBookmarks();
+                            setContextMenu(null);
+                            setShowMoveToSubmenu(false);
+                          }
+                        } catch (error) {
+                          console.error('Failed to move bookmark:', error);
+                        }
+                      }}
+                      className="w-full px-6 py-2 text-left hover:bg-gray-100 transition-colors"
+                    >
+                      {group.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={() => {
                 handleDelete(contextMenu.bookmark.id);
@@ -710,11 +759,11 @@ function App() {
                     {imagePreview ? "Change Image" : "Upload Image"}
                   </button>
                   {imagePreview && (
-                    <div className="mt-4">
+                    <div className="mt-4 flex items-center justify-center bg-gray-50 rounded-lg" style={{ height: '200px' }}>
                       <img
                         src={imagePreview}
                         alt="Preview"
-                        className="w-full h-40 object-contain rounded-lg bg-gray-50"
+                        className="max-w-full max-h-full object-contain rounded-lg"
                       />
                     </div>
                   )}
@@ -723,15 +772,27 @@ function App() {
                   <button
                     type="button"
                     onClick={closeModal}
-                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                    disabled={isSaving}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                    disabled={isSaving}
+                    className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
-                    {editingBookmark ? "Update" : "Create"}
+                    {isSaving ? (
+                      <>
+                        <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      <span>{editingBookmark ? "Update" : "Create"}</span>
+                    )}
                   </button>
                 </div>
               </form>

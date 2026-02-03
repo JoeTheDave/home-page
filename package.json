@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:JoeTheDave/home-page.git"
+  },
   "scripts": {
     "dev": "npm run db:ensure && npm run db:migrate && concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:setup": "npm run db:ensure && npm run db:migrate",

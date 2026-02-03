@@ -2,6 +2,11 @@
 
 Custom browser homepage with bookmarks organized in groups.
 
+## Repository
+
+- GitHub: https://github.com/JoeTheDave/home-page
+- Clone: `git clone git@github.com:JoeTheDave/home-page.git`
+
 ## Setup
 
 Install dependencies:

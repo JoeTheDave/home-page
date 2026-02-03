@@ -1,7 +1,14 @@
+import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import path from "path";
+
+// Load .env from project root (override shell env vars)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, "../../.env"), override: true });
+
 import express from "express";
 import cors from "cors";
-import path from "path";
-import { fileURLToPath } from "url";
 import session from "express-session";
 import cookieParser from "cookie-parser";
 import multer from "multer";
@@ -9,9 +16,6 @@ import prisma from "./lib/prisma.js";
 import passport from "./lib/auth.js";
 import { isAuthenticated } from "./lib/middleware.js";
 import { uploadToS3 } from "./lib/s3.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -58,9 +62,6 @@ app.use(
     },
   }),
 );
-app.use(passport.initialize());
-app.use(passport.session());
-
 app.use(passport.initialize());
 app.use(passport.session());
 
@@ -405,6 +406,58 @@ app.post("/api/bookmarks/:id/restore", isAuthenticated, async (req, res) => {
   } catch (error) {
     console.error("Error restoring bookmark:", error);
     res.status(500).json({ error: "Failed to restore bookmark" });
+  }
+});
+
+// Move bookmark to different group
+app.patch("/api/bookmarks/:id/move", isAuthenticated, async (req, res) => {
+  try {
+    const user = req.user as any;
+    const { id } = req.params;
+    const { groupId } = req.body;
+
+    if (!groupId) {
+      return res.status(400).json({ error: "groupId is required" });
+    }
+
+    // Check if bookmark belongs to user
+    const bookmark = await prisma.bookmark.findFirst({
+      where: { id, userId: user.id },
+    });
+
+    if (!bookmark) {
+      return res.status(404).json({ error: "Bookmark not found" });
+    }
+
+    // Check if target group belongs to user
+    const targetGroup = await prisma.bookmarkGroup.findFirst({
+      where: { id: groupId, userId: user.id, deleted: false },
+    });
+
+    if (!targetGroup) {
+      return res.status(404).json({ error: "Target group not found" });
+    }
+
+    // Get the highest orderId in target group
+    const maxOrder = await prisma.bookmark.findFirst({
+      where: { groupId, deleted: false },
+      orderBy: { orderId: "desc" },
+      select: { orderId: true },
+    });
+
+    // Move bookmark to new group with highest orderId
+    const updated = await prisma.bookmark.update({
+      where: { id },
+      data: {
+        groupId,
+        orderId: (maxOrder?.orderId ?? -1) + 1,
+      },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error("Error moving bookmark:", error);
+    res.status(500).json({ error: "Failed to move bookmark" });
   }
 });
 
