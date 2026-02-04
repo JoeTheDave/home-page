@@ -10,6 +10,7 @@ dotenv.config({ path: path.join(__dirname, "../../.env"), override: true });
 import express from "express";
 import cors from "cors";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import cookieParser from "cookie-parser";
 import multer from "multer";
 import prisma from "./lib/prisma.js";
@@ -17,8 +18,28 @@ import passport from "./lib/auth.js";
 import { isAuthenticated } from "./lib/middleware.js";
 import { uploadToS3 } from "./lib/s3.js";
 
+const PgSession = connectPgSimple(session);
+
+// Create session store with error handling
+const sessionStore = new PgSession({
+  conString: process.env.DATABASE_URL,
+  createTableIfMissing: true,
+});
+
+sessionStore.on("error", (err: any) => {
+  console.error("[Session Store] Error:", err);
+});
+
+console.log(
+  "[Session Store] Initialized with DATABASE_URL:",
+  process.env.DATABASE_URL ? "SET" : "NOT SET",
+);
+
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Trust Fly.io proxy
+app.set("trust proxy", 1);
 
 // Configure multer for file uploads (memory storage for S3)
 const upload = multer({
@@ -51,6 +72,8 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(
   session({
+    store: sessionStore,
+    name: "sessionId", // Explicit cookie name
     secret:
       process.env.SESSION_SECRET || "your-secret-key-change-in-production",
     resave: false,
@@ -59,6 +82,8 @@ app.use(
       secure: process.env.NODE_ENV === "production",
       httpOnly: true,
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+      sameSite: "lax",
+      path: "/",
     },
   }),
 );
@@ -77,19 +102,51 @@ app.get(
   }),
 );
 
-app.get(
-  "/api/auth/google/callback",
-  passport.authenticate("google", { failureRedirect: "/" }),
-  (req, res) => {
-    // In development, redirect to Vite dev server; in production, redirect to root
+app.get("/api/auth/google/callback", (req, res, next) => {
+  passport.authenticate("google", (err: any, user: any, info: any) => {
+    if (err) {
+      return next(err);
+    }
+
     const clientPort = process.env.VITE_PORT || 3000;
-    const redirectUrl =
-      process.env.NODE_ENV === "production"
-        ? "/"
-        : `http://localhost:${clientPort}`;
-    res.redirect(redirectUrl);
-  },
-);
+
+    // Check if user was denied due to unauthorized email
+    if (!user && info?.message === "unauthorized") {
+      const redirectUrl =
+        process.env.NODE_ENV === "production"
+          ? "/access-denied"
+          : `http://localhost:${clientPort}/access-denied`;
+      return res.redirect(redirectUrl);
+    }
+
+    if (!user) {
+      const redirectUrl =
+        process.env.NODE_ENV === "production"
+          ? "/"
+          : `http://localhost:${clientPort}`;
+      return res.redirect(redirectUrl);
+    }
+
+    req.logIn(user, (err: any) => {
+      if (err) {
+        return next(err);
+      }
+
+      // Explicitly save the session before redirecting
+      req.session.save((err: any) => {
+        if (err) {
+          return next(err);
+        }
+
+        const redirectUrl =
+          process.env.NODE_ENV === "production"
+            ? "/"
+            : `http://localhost:${clientPort}`;
+        res.redirect(redirectUrl);
+      });
+    });
+  })(req, res, next);
+});
 
 app.get("/api/auth/me", (req, res) => {
   if (req.isAuthenticated()) {
@@ -230,6 +287,67 @@ app.post("/api/groups/:id/restore", isAuthenticated, async (req, res) => {
   } catch (error) {
     console.error("Error restoring group:", error);
     res.status(500).json({ error: "Failed to restore group" });
+  }
+});
+
+// Allowed emails routes (Admin only)
+app.get("/api/allowed-emails", isAuthenticated, async (req, res) => {
+  try {
+    const user = req.user as any;
+
+    if (!user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const allowedEmails = await prisma.allowedEmail.findMany({
+      orderBy: { createdAt: "asc" },
+    });
+    res.json(allowedEmails);
+  } catch (error) {
+    console.error("Error fetching allowed emails:", error);
+    res.status(500).json({ error: "Failed to fetch allowed emails" });
+  }
+});
+
+app.post("/api/allowed-emails", isAuthenticated, async (req, res) => {
+  try {
+    const user = req.user as any;
+    const { email } = req.body;
+
+    if (!user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const allowedEmail = await prisma.allowedEmail.create({
+      data: { email },
+    });
+    res.status(201).json(allowedEmail);
+  } catch (error) {
+    console.error("Error adding allowed email:", error);
+    res.status(500).json({ error: "Failed to add allowed email" });
+  }
+});
+
+app.delete("/api/allowed-emails/:id", isAuthenticated, async (req, res) => {
+  try {
+    const user = req.user as any;
+    const { id } = req.params;
+
+    if (!user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    await prisma.allowedEmail.delete({
+      where: { id },
+    });
+    res.json({ message: "Email removed from allowed list" });
+  } catch (error) {
+    console.error("Error deleting allowed email:", error);
+    res.status(500).json({ error: "Failed to delete allowed email" });
   }
 });
 

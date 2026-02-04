@@ -5,6 +5,7 @@ interface User {
   email: string;
   name: string | null;
   picture?: string;
+  isAdmin: boolean;
 }
 
 interface BookmarkGroup {
@@ -30,15 +31,23 @@ interface ContextMenu {
   bookmark: Bookmark;
 }
 
+interface AllowedEmail {
+  id: string;
+  email: string;
+  createdAt: string;
+}
+
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [groups, setGroups] = useState<BookmarkGroup[]>([]);
+  const [allowedEmails, setAllowedEmails] = useState<AllowedEmail[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showManageGroupsModal, setShowManageGroupsModal] = useState(false);
+  const [showManageUsersModal, setShowManageUsersModal] = useState(false);
   const [editingBookmark, setEditingBookmark] = useState<Bookmark | null>(null);
   const [editingGroup, setEditingGroup] = useState<BookmarkGroup | null>(null);
   const [groupFormData, setGroupFormData] = useState({ name: "" });
@@ -361,6 +370,53 @@ function App() {
     }
   };
 
+  const fetchAllowedEmails = async () => {
+    try {
+      const response = await fetch(`${baseUrl}/api/allowed-emails`, {
+        credentials: "include",
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAllowedEmails(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch allowed emails:", error);
+    }
+  };
+
+  const handleAddAllowedEmail = async (email: string) => {
+    try {
+      const response = await fetch(`${baseUrl}/api/allowed-emails`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email }),
+      });
+      if (response.ok) {
+        fetchAllowedEmails();
+      } else {
+        const data = await response.json();
+        alert(data.error || "Failed to add email");
+      }
+    } catch (error) {
+      console.error("Failed to add allowed email:", error);
+    }
+  };
+
+  const handleDeleteAllowedEmail = async (id: string) => {
+    try {
+      const response = await fetch(`${baseUrl}/api/allowed-emails/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (response.ok) {
+        fetchAllowedEmails();
+      }
+    } catch (error) {
+      console.error("Failed to delete allowed email:", error);
+    }
+  };
+
   const handleDragStart = (e: React.DragEvent, index: number) => {
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = "move";
@@ -457,7 +513,7 @@ function App() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
       <div className="px-4 py-8">
         {/* Header */}
-        <header className="flex justify-between items-center mb-12">
+        <header className="flex justify-between items-center mb-12 relative">
           {/* Group Selector */}
           <div className="flex items-center gap-2">
             <select
@@ -544,12 +600,24 @@ function App() {
               </button>
               {showUserMenu && (
                 <div
-                  className="absolute right-0 mt-2 bg-white rounded-lg shadow-xl py-2 z-50 min-w-[120px]"
+                  className="absolute right-0 mt-2 bg-white rounded-lg shadow-xl py-2 z-50"
                   onClick={(e) => e.stopPropagation()}
                 >
+                  {user?.isAdmin && (
+                    <button
+                      onClick={() => {
+                        setShowManageUsersModal(true);
+                        setShowUserMenu(false);
+                        fetchAllowedEmails();
+                      }}
+                      className="w-full px-4 py-2 text-left hover:bg-gray-100 transition-colors whitespace-nowrap"
+                    >
+                      Manage Users
+                    </button>
+                  )}
                   <button
                     onClick={handleLogout}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-100 transition-colors"
+                    className="w-full px-4 py-2 text-left hover:bg-gray-100 transition-colors whitespace-nowrap"
                   >
                     Logout
                   </button>
@@ -928,6 +996,88 @@ function App() {
               >
                 Close
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Manage Users Modal (Admin only) */}
+        {showManageUsersModal && user?.isAdmin && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] overflow-y-auto">
+              <div className="p-6">
+                <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                  Manage Users
+                </h2>
+
+                {/* Add New Email */}
+                <div className="mb-6">
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const formData = new FormData(e.currentTarget);
+                      const email = formData.get("email") as string;
+                      if (email) {
+                        handleAddAllowedEmail(email);
+                        e.currentTarget.reset();
+                      }
+                    }}
+                    className="flex gap-2"
+                  >
+                    <input
+                      type="email"
+                      name="email"
+                      placeholder="user@example.com"
+                      required
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                    >
+                      Add
+                    </button>
+                  </form>
+                </div>
+
+                {/* Allowed Emails List */}
+                <div className="space-y-2 mb-4">
+                  <h3 className="text-sm font-semibold text-gray-600 mb-2">
+                    Allowed Emails
+                  </h3>
+                  {allowedEmails.map((email) => (
+                    <div
+                      key={email.id}
+                      className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                    >
+                      <span className="text-gray-800">{email.email}</span>
+                      {email.email === "joethedave@gmail.com" ? (
+                        <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-medium">
+                          Admin
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => handleDeleteAllowedEmail(email.id)}
+                          className="text-red-600 hover:text-red-700 px-2"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {allowedEmails.length === 0 && (
+                    <p className="text-gray-500 text-sm text-center py-4">
+                      No allowed emails yet
+                    </p>
+                  )}
+                </div>
+
+                <button
+                  onClick={() => setShowManageUsersModal(false)}
+                  className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         )}

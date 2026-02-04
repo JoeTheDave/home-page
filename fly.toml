@@ -1,4 +1,4 @@
-app = "home-page"
+app = "sage-home-page"
 primary_region = "dfw"
 
 [build]

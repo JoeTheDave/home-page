@@ -21,7 +21,7 @@
     "preview": "vite preview --config client/vite.config.ts",
     "db:ensure": "bash scripts/ensure-postgres.sh && bash scripts/ensure-database.sh",
     "db:generate": "prisma generate --schema=server/src/prisma/schema.prisma",
-    "db:migrate": "prisma migrate dev --schema=server/src/prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema=server/src/prisma/schema.prisma && npm run db:generate",
     "db:migrate:deploy": "prisma migrate deploy --schema=server/src/prisma/schema.prisma",
     "db:push": "prisma db push --schema=server/src/prisma/schema.prisma",
     "db:studio": "prisma studio --schema=server/src/prisma/schema.prisma",
@@ -43,6 +43,7 @@
     "@types/multer": "^2.0.0",
     "@types/passport": "^1.0.17",
     "@types/passport-google-oauth20": "^2.0.17",
+    "connect-pg-simple": "^10.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "express": "^4.18.2",
@@ -55,6 +56,7 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@types/connect-pg-simple": "^7.0.3",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^20.10.5",

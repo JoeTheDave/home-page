@@ -14,18 +14,34 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
+        const email = profile.emails?.[0]?.value || "";
+
+        // Check if email is in the allowed list
+        const allowedEmail = await prisma.allowedEmail.findUnique({
+          where: { email },
+        });
+
+        if (!allowedEmail) {
+          // Return error with special flag for unauthorized access
+          return done(null, false, { message: "unauthorized" });
+        }
+
         // Find or create user based on Google profile
         let user = await prisma.user.findUnique({
           where: { googleId: profile.id },
         });
 
         if (!user) {
+          // Determine if user should be admin
+          const isAdmin = email === "joethedave@gmail.com";
+
           user = await prisma.user.create({
             data: {
               googleId: profile.id,
-              email: profile.emails?.[0]?.value || "",
+              email,
               name: profile.displayName,
               picture: profile.photos?.[0]?.value,
+              isAdmin,
             },
           });
 

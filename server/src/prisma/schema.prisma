@@ -19,6 +19,7 @@ model User {
   name          String?
   googleId      String?         @unique
   picture       String?
+  isAdmin       Boolean         @default(false)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   bookmarks     Bookmark[]
@@ -55,4 +56,10 @@ model Bookmark {
 
   @@index([userId])
   @@index([groupId, deleted, orderId])
+}
+
+model AllowedEmail {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
 }
