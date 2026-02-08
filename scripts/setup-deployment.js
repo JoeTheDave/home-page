@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { createInterface } from 'readline';
-
-const SETUP_MARKER = '.flyio-setup-complete';
 
 // Color functions for console output
 const colors = {
@@ -219,15 +217,20 @@ async function setDatabaseUrl(databaseUrl) {
   }
 }
 
-function markSetupComplete() {
-  writeFileSync(SETUP_MARKER, new Date().toISOString());
-  log('✅', colors.green('Deployment setup completed!'));
+async function isAppAlreadyDeployed() {
+  const appName = getAppNameFromFlyToml();
+  try {
+    const userApps = execCommand('fly apps list', { silent: true });
+    return userApps.includes(appName);
+  } catch (error) {
+    return false;
+  }
 }
 
 async function main() {
-  // Check if setup already completed
-  if (existsSync(SETUP_MARKER)) {
-    // Setup already done, exit silently to continue with deployment
+  // Check if app is already deployed on Fly.io
+  if (await isAppAlreadyDeployed()) {
+    // App already exists, skip setup and proceed with deployment
     process.exit(0);
   }
   
@@ -239,7 +242,6 @@ async function main() {
     const databaseUrl = await getDatabaseUrl();
     await createFlyApp();
     await setDatabaseUrl(databaseUrl);
-    markSetupComplete();
     
     console.log('\n' + colors.green('🎉 Setup complete! Proceeding with deployment...'));
     

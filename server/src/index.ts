@@ -1,22 +1,36 @@
-import dotenv from "dotenv";
-import { fileURLToPath } from "url";
-import path from "path";
-
-// Load .env from project root (override shell env vars)
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.join(__dirname, "../../.env"), override: true });
-
 import express from "express";
 import cors from "cors";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import cookieParser from "cookie-parser";
 import multer from "multer";
+import { fileURLToPath } from "url";
+import path from "path";
+
+// Load .env file only in development (production uses Fly.io secrets)
+if (process.env.NODE_ENV !== "production") {
+  const dotenv = await import("dotenv");
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  dotenv.default.config({ path: path.join(__dirname, "../../.env"), override: true });
+}
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 import prisma from "./lib/prisma.js";
 import passport from "./lib/auth.js";
 import { isAuthenticated } from "./lib/middleware.js";
 import { uploadToS3 } from "./lib/s3.js";
+
+// Type definition for authenticated user
+interface AuthenticatedUser {
+  id: string;
+  email: string;
+  name: string | null;
+  picture: string | null;
+  isAdmin: boolean;
+}
 
 const PgSession = connectPgSimple(session);
 
@@ -26,7 +40,7 @@ const sessionStore = new PgSession({
   createTableIfMissing: true,
 });
 
-sessionStore.on("error", (err: any) => {
+sessionStore.on("error", (err: Error) => {
   console.error("[Session Store] Error:", err);
 });
 
@@ -103,7 +117,7 @@ app.get(
 );
 
 app.get("/api/auth/google/callback", (req, res, next) => {
-  passport.authenticate("google", (err: any, user: any, info: any) => {
+  passport.authenticate("google", (err: Error | null, user: Express.User | false, info?: { message: string }) => {
     if (err) {
       return next(err);
     }
@@ -127,13 +141,13 @@ app.get("/api/auth/google/callback", (req, res, next) => {
       return res.redirect(redirectUrl);
     }
 
-    req.logIn(user, (err: any) => {
+    req.logIn(user, (err: Error | null) => {
       if (err) {
         return next(err);
       }
 
       // Explicitly save the session before redirecting
-      req.session.save((err: any) => {
+      req.session.save((err?: Error) => {
         if (err) {
           return next(err);
         }
@@ -168,7 +182,7 @@ app.post("/api/auth/logout", (req, res) => {
 // Group routes
 app.get("/api/groups", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const groups = await prisma.bookmarkGroup.findMany({
       where: { userId: user.id, deleted: false },
       orderBy: { createdAt: "asc" },
@@ -181,7 +195,7 @@ app.get("/api/groups", isAuthenticated, async (req, res) => {
 
 app.post("/api/groups", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { name } = req.body;
 
     if (!name) {
@@ -203,7 +217,7 @@ app.post("/api/groups", isAuthenticated, async (req, res) => {
 
 app.put("/api/groups/:id", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { id } = req.params;
     const { name } = req.body;
 
@@ -230,7 +244,7 @@ app.put("/api/groups/:id", isAuthenticated, async (req, res) => {
 
 app.delete("/api/groups/:id", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { id } = req.params;
     const { selectedGroupId } = req.query;
 
@@ -265,7 +279,7 @@ app.delete("/api/groups/:id", isAuthenticated, async (req, res) => {
 
 app.post("/api/groups/:id/restore", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { id } = req.params;
 
     // Check if group belongs to user and is deleted
@@ -293,7 +307,7 @@ app.post("/api/groups/:id/restore", isAuthenticated, async (req, res) => {
 // Allowed emails routes (Admin only)
 app.get("/api/allowed-emails", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
 
     if (!user.isAdmin) {
       return res.status(403).json({ error: "Admin access required" });
@@ -311,7 +325,7 @@ app.get("/api/allowed-emails", isAuthenticated, async (req, res) => {
 
 app.post("/api/allowed-emails", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { email } = req.body;
 
     if (!user.isAdmin) {
@@ -334,7 +348,7 @@ app.post("/api/allowed-emails", isAuthenticated, async (req, res) => {
 
 app.delete("/api/allowed-emails/:id", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { id } = req.params;
 
     if (!user.isAdmin) {
@@ -354,11 +368,14 @@ app.delete("/api/allowed-emails/:id", isAuthenticated, async (req, res) => {
 // Bookmark routes
 app.get("/api/bookmarks", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as { id: string; email: string };
     const { groupId } = req.query;
 
-    const where: any = { userId: user.id, deleted: false };
-    if (groupId) {
+    const where: { userId: string; deleted: boolean; groupId?: string } = { 
+      userId: user.id, 
+      deleted: false 
+    };
+    if (groupId && typeof groupId === 'string') {
       where.groupId = groupId;
     }
 
@@ -378,7 +395,7 @@ app.post(
   upload.single("image"),
   async (req, res) => {
     try {
-      const user = req.user as any;
+      const user = req.user as AuthenticatedUser;
       const { url, name, groupId } = req.body;
 
       if (!url || !name || !groupId) {
@@ -430,7 +447,7 @@ app.put(
   upload.single("image"),
   async (req, res) => {
     try {
-      const user = req.user as any;
+      const user = req.user as AuthenticatedUser;
       const { id } = req.params;
       const { url, name } = req.body;
 
@@ -443,7 +460,7 @@ app.put(
         return res.status(404).json({ error: "Bookmark not found" });
       }
 
-      const updateData: any = { url, name };
+      const updateData: { url: string; name: string; image?: string } = { url, name };
 
       if (req.file) {
         // Upload new image to S3
@@ -474,7 +491,7 @@ app.put(
 
 app.delete("/api/bookmarks/:id", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { id } = req.params;
 
     // Check if bookmark belongs to user
@@ -502,7 +519,7 @@ app.delete("/api/bookmarks/:id", isAuthenticated, async (req, res) => {
 // Undo delete (restore bookmark)
 app.post("/api/bookmarks/:id/restore", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { id } = req.params;
 
     // Check if bookmark belongs to user and is deleted
@@ -530,7 +547,7 @@ app.post("/api/bookmarks/:id/restore", isAuthenticated, async (req, res) => {
 // Move bookmark to different group
 app.patch("/api/bookmarks/:id/move", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { id } = req.params;
     const { groupId } = req.body;
 
@@ -582,7 +599,7 @@ app.patch("/api/bookmarks/:id/move", isAuthenticated, async (req, res) => {
 // Reorder bookmarks
 app.post("/api/bookmarks/reorder", isAuthenticated, async (req, res) => {
   try {
-    const user = req.user as any;
+    const user = req.user as AuthenticatedUser;
     const { bookmarkIds } = req.body; // Array of bookmark IDs in new order
 
     if (!Array.isArray(bookmarkIds)) {
@@ -650,6 +667,24 @@ app.post("/api/users", async (req, res) => {
 // Catch all handler: send back React's index.html file for any non-API routes
 app.get("*", (req, res) => {
   res.sendFile(path.join(clientBuildPath, "index.html"));
+});
+
+// Error handling middleware - must be after all routes
+app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('[Server Error]', err);
+  
+  // In production, send generic error message
+  if (process.env.NODE_ENV === "production") {
+    res.status(500).json({ 
+      error: "An unexpected error occurred. Please try again later." 
+    });
+  } else {
+    // In development, send detailed error
+    res.status(500).json({ 
+      error: err.message,
+      stack: err.stack 
+    });
+  }
 });
 
 app.listen(PORT, () => {
