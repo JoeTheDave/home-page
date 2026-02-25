@@ -4,6 +4,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import cookieParser from "cookie-parser";
 import multer from "multer";
+import { Prisma } from "@prisma/client";
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -12,7 +13,10 @@ if (process.env.NODE_ENV !== "production") {
   const dotenv = await import("dotenv");
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
-  dotenv.default.config({ path: path.join(__dirname, "../../.env"), override: true });
+  dotenv.default.config({
+    path: path.join(__dirname, "../../.env"),
+    override: true,
+  });
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,7 +34,102 @@ interface AuthenticatedUser {
   name: string | null;
   picture: string | null;
   isAdmin: boolean;
+  settings?: unknown;
 }
+
+type SearchEngine = "brave" | "duckduckgo" | "google" | "bing" | "yahoo";
+type ThemeMode = "light" | "dark";
+type BackgroundTheme =
+  | "purple"
+  | "blue"
+  | "green"
+  | "red"
+  | "orange"
+  | "yellow"
+  | "black"
+  | "gray";
+
+interface UserSettings {
+  searchEngine: SearchEngine;
+  theme: ThemeMode;
+  background: BackgroundTheme;
+}
+
+const DEFAULT_USER_SETTINGS: UserSettings = {
+  searchEngine: "google",
+  theme: "light",
+  background: "purple",
+};
+
+const SEARCH_ENGINES = new Set<SearchEngine>([
+  "brave",
+  "duckduckgo",
+  "google",
+  "bing",
+  "yahoo",
+]);
+const THEMES = new Set<ThemeMode>(["light", "dark"]);
+const BACKGROUNDS = new Set<BackgroundTheme>([
+  "purple",
+  "blue",
+  "green",
+  "red",
+  "orange",
+  "yellow",
+  "black",
+  "gray",
+]);
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const sanitizeSettingsPatch = (value: unknown): Partial<UserSettings> => {
+  if (!isPlainObject(value)) {
+    return {};
+  }
+
+  const patch: Partial<UserSettings> = {};
+
+  if (
+    typeof value.searchEngine === "string" &&
+    SEARCH_ENGINES.has(value.searchEngine as SearchEngine)
+  ) {
+    patch.searchEngine = value.searchEngine as SearchEngine;
+  }
+
+  if (typeof value.theme === "string" && THEMES.has(value.theme as ThemeMode)) {
+    patch.theme = value.theme as ThemeMode;
+  }
+
+  if (
+    typeof value.background === "string" &&
+    BACKGROUNDS.has(value.background as BackgroundTheme)
+  ) {
+    patch.background = value.background as BackgroundTheme;
+  }
+
+  return patch;
+};
+
+const pruneDefaultSettings = (
+  settings: UserSettings,
+): Partial<UserSettings> | null => {
+  const entries = Object.entries(settings).filter(([key, value]) => {
+    return DEFAULT_USER_SETTINGS[key as keyof UserSettings] !== value;
+  });
+
+  return entries.length > 0
+    ? (Object.fromEntries(entries) as Partial<UserSettings>)
+    : null;
+};
+
+const isMissingSettingsColumnError = (error: unknown) => {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2022" &&
+    String(error.meta?.column || "").includes("User.settings")
+  );
+};
 
 const PgSession = connectPgSimple(session);
 
@@ -117,57 +216,83 @@ app.get(
 );
 
 app.get("/api/auth/google/callback", (req, res, next) => {
-  passport.authenticate("google", (err: Error | null, user: Express.User | false, info?: { message: string }) => {
-    if (err) {
-      return next(err);
-    }
-
-    const clientPort = process.env.VITE_PORT || 3000;
-
-    // Check if user was denied due to unauthorized email
-    if (!user && info?.message === "unauthorized") {
-      const redirectUrl =
-        process.env.NODE_ENV === "production"
-          ? "/access-denied"
-          : `http://localhost:${clientPort}/access-denied`;
-      return res.redirect(redirectUrl);
-    }
-
-    if (!user) {
-      const redirectUrl =
-        process.env.NODE_ENV === "production"
-          ? "/"
-          : `http://localhost:${clientPort}`;
-      return res.redirect(redirectUrl);
-    }
-
-    req.logIn(user, (err: Error | null) => {
+  passport.authenticate(
+    "google",
+    (
+      err: Error | null,
+      user: Express.User | false,
+      info?: { message: string },
+    ) => {
       if (err) {
         return next(err);
       }
 
-      // Explicitly save the session before redirecting
-      req.session.save((err?: Error) => {
-        if (err) {
-          return next(err);
-        }
+      const clientPort = process.env.VITE_PORT || 3000;
 
+      // Check if user was denied due to unauthorized email
+      if (!user && info?.message === "unauthorized") {
+        const redirectUrl =
+          process.env.NODE_ENV === "production"
+            ? "/access-denied"
+            : `http://localhost:${clientPort}/access-denied`;
+        return res.redirect(redirectUrl);
+      }
+
+      if (!user) {
         const redirectUrl =
           process.env.NODE_ENV === "production"
             ? "/"
             : `http://localhost:${clientPort}`;
-        res.redirect(redirectUrl);
+        return res.redirect(redirectUrl);
+      }
+
+      req.logIn(user, (err: Error | null) => {
+        if (err) {
+          return next(err);
+        }
+
+        // Explicitly save the session before redirecting
+        req.session.save((err?: Error) => {
+          if (err) {
+            return next(err);
+          }
+
+          const redirectUrl =
+            process.env.NODE_ENV === "production"
+              ? "/"
+              : `http://localhost:${clientPort}`;
+          res.redirect(redirectUrl);
+        });
       });
-    });
-  })(req, res, next);
+    },
+  )(req, res, next);
 });
 
 app.get("/api/auth/me", (req, res) => {
-  if (req.isAuthenticated()) {
-    res.json(req.user);
-  } else {
-    res.status(401).json({ error: "Not authenticated" });
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ error: "Not authenticated" });
   }
+
+  const authUser = req.user as AuthenticatedUser;
+
+  prisma.user
+    .findUnique({
+      where: { id: authUser.id },
+      select: { settings: true },
+    })
+    .then((result) => {
+      res.json({
+        ...authUser,
+        settings: result?.settings ?? null,
+      });
+    })
+    .catch((error) => {
+      if (isMissingSettingsColumnError(error)) {
+        return res.json(authUser);
+      }
+      console.error("Failed to fetch auth user settings:", error);
+      res.status(500).json({ error: "Failed to fetch user" });
+    });
 });
 
 app.post("/api/auth/logout", (req, res) => {
@@ -177,6 +302,51 @@ app.post("/api/auth/logout", (req, res) => {
     }
     res.json({ message: "Logged out successfully" });
   });
+});
+
+app.patch("/api/user/settings", isAuthenticated, async (req, res) => {
+  try {
+    const user = req.user as AuthenticatedUser;
+    const settingsPatch = sanitizeSettingsPatch(req.body?.settings);
+
+    if (Object.keys(settingsPatch).length === 0) {
+      return res.status(400).json({ error: "No valid settings provided" });
+    }
+
+    const existingUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { settings: true },
+    });
+
+    const existingSettings = sanitizeSettingsPatch(existingUser?.settings);
+    const mergedSettings: UserSettings = {
+      ...DEFAULT_USER_SETTINGS,
+      ...existingSettings,
+      ...settingsPatch,
+    };
+
+    const settingsToStore = pruneDefaultSettings(mergedSettings);
+
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        settings: settingsToStore ?? Prisma.DbNull,
+      },
+      select: {
+        settings: true,
+      },
+    });
+
+    res.json({ settings: updatedUser.settings });
+  } catch (error) {
+    if (isMissingSettingsColumnError(error)) {
+      return res
+        .status(503)
+        .json({ error: "Settings are temporarily unavailable. Please retry." });
+    }
+    console.error("Error updating user settings:", error);
+    res.status(500).json({ error: "Failed to update settings" });
+  }
 });
 
 // Group routes
@@ -371,11 +541,11 @@ app.get("/api/bookmarks", isAuthenticated, async (req, res) => {
     const user = req.user as { id: string; email: string };
     const { groupId } = req.query;
 
-    const where: { userId: string; deleted: boolean; groupId?: string } = { 
-      userId: user.id, 
-      deleted: false 
+    const where: { userId: string; deleted: boolean; groupId?: string } = {
+      userId: user.id,
+      deleted: false,
     };
-    if (groupId && typeof groupId === 'string') {
+    if (groupId && typeof groupId === "string") {
       where.groupId = groupId;
     }
 
@@ -460,7 +630,10 @@ app.put(
         return res.status(404).json({ error: "Bookmark not found" });
       }
 
-      const updateData: { url: string; name: string; image?: string } = { url, name };
+      const updateData: { url: string; name: string; image?: string } = {
+        url,
+        name,
+      };
 
       if (req.file) {
         // Upload new image to S3
@@ -670,22 +843,29 @@ app.get("*", (req, res) => {
 });
 
 // Error handling middleware - must be after all routes
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('[Server Error]', err);
-  
-  // In production, send generic error message
-  if (process.env.NODE_ENV === "production") {
-    res.status(500).json({ 
-      error: "An unexpected error occurred. Please try again later." 
-    });
-  } else {
-    // In development, send detailed error
-    res.status(500).json({ 
-      error: err.message,
-      stack: err.stack 
-    });
-  }
-});
+app.use(
+  (
+    err: Error,
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    console.error("[Server Error]", err);
+
+    // In production, send generic error message
+    if (process.env.NODE_ENV === "production") {
+      res.status(500).json({
+        error: "An unexpected error occurred. Please try again later.",
+      });
+    } else {
+      // In development, send detailed error
+      res.status(500).json({
+        error: err.message,
+        stack: err.stack,
+      });
+    }
+  },
+);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

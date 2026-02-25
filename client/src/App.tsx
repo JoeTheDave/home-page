@@ -1,4 +1,17 @@
 import { useState, useEffect, useRef } from "react";
+import {
+  ChevronRight,
+  LoaderCircle,
+  LogOut,
+  Menu,
+  Moon,
+  Palette,
+  Plus,
+  Settings,
+  Sun,
+  User,
+  X,
+} from "lucide-react";
 
 interface User {
   id: string;
@@ -6,7 +19,124 @@ interface User {
   name: string | null;
   picture?: string;
   isAdmin: boolean;
+  settings?: Partial<UserSettings> | null;
 }
+
+type SearchEngine = "brave" | "duckduckgo" | "google" | "bing" | "yahoo";
+type ThemeMode = "light" | "dark";
+type BackgroundTheme =
+  | "purple"
+  | "blue"
+  | "green"
+  | "red"
+  | "orange"
+  | "yellow"
+  | "black"
+  | "gray";
+
+interface UserSettings {
+  searchEngine: SearchEngine;
+  theme: ThemeMode;
+  background: BackgroundTheme;
+}
+
+const DEFAULT_USER_SETTINGS: UserSettings = {
+  searchEngine: "google",
+  theme: "light",
+  background: "purple",
+};
+
+const SEARCH_ENGINE_OPTIONS: {
+  key: SearchEngine;
+  label: string;
+  favicon: string;
+  searchUrl: string;
+}[] = [
+  {
+    key: "brave",
+    label: "Brave",
+    favicon: "/search-engines/brave.ico",
+    searchUrl: "https://search.brave.com/search?q=",
+  },
+  {
+    key: "duckduckgo",
+    label: "DuckDuckGo",
+    favicon: "/search-engines/duckduckgo.ico",
+    searchUrl: "https://duckduckgo.com/?q=",
+  },
+  {
+    key: "google",
+    label: "Google",
+    favicon: "/search-engines/google.ico",
+    searchUrl: "https://www.google.com/search?q=",
+  },
+  {
+    key: "bing",
+    label: "Bing",
+    favicon: "/search-engines/bing.ico",
+    searchUrl: "https://www.bing.com/search?q=",
+  },
+  {
+    key: "yahoo",
+    label: "Yahoo",
+    favicon: "/search-engines/yahoo.ico",
+    searchUrl: "https://search.yahoo.com/search?p=",
+  },
+];
+
+const BACKGROUND_OPTIONS: {
+  key: BackgroundTheme;
+  label: string;
+  className: string;
+}[] = [
+  {
+    key: "purple",
+    label: "Purple",
+    className: "from-slate-900 via-purple-900 to-slate-900",
+  },
+  {
+    key: "blue",
+    label: "Blue",
+    className: "from-slate-900 via-blue-900 to-slate-900",
+  },
+  {
+    key: "green",
+    label: "Green",
+    className: "from-slate-900 via-emerald-900 to-slate-900",
+  },
+  {
+    key: "red",
+    label: "Red",
+    className: "from-slate-900 via-rose-900 to-slate-900",
+  },
+  {
+    key: "orange",
+    label: "Orange",
+    className: "from-slate-900 via-orange-800 to-slate-900",
+  },
+  {
+    key: "yellow",
+    label: "Yellow",
+    className: "from-slate-900 via-amber-700 to-slate-900",
+  },
+  {
+    key: "black",
+    label: "Black",
+    className: "from-black via-zinc-900 to-black",
+  },
+  {
+    key: "gray",
+    label: "Gray",
+    className: "from-slate-900 via-slate-700 to-slate-900",
+  },
+];
+
+const normalizeSettings = (
+  rawSettings?: Partial<UserSettings> | null,
+): UserSettings => ({
+  ...DEFAULT_USER_SETTINGS,
+  ...(rawSettings || {}),
+});
 
 interface BookmarkGroup {
   id: string;
@@ -48,12 +178,14 @@ function App() {
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showManageGroupsModal, setShowManageGroupsModal] = useState(false);
   const [showManageUsersModal, setShowManageUsersModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [editingBookmark, setEditingBookmark] = useState<Bookmark | null>(null);
   const [editingGroup, setEditingGroup] = useState<BookmarkGroup | null>(null);
   const [groupFormData, setGroupFormData] = useState({ name: "" });
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showMoveToSubmenu, setShowMoveToSubmenu] = useState(false);
+  const [settings, setSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
   const [toast, setToast] = useState<{
     message: string;
     bookmarkId: string;
@@ -61,6 +193,7 @@ function App() {
   const [deletedBookmark, setDeletedBookmark] = useState<Bookmark | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [formData, setFormData] = useState({
     url: "",
     name: "",
@@ -107,6 +240,7 @@ function App() {
       if (response.ok) {
         const userData = await response.json();
         setUser(userData);
+        setSettings(normalizeSettings(userData.settings));
       }
     } catch (error) {
       console.error("Auth check failed:", error);
@@ -480,9 +614,116 @@ function App() {
     window.location.href = formattedUrl;
   };
 
+  const looksLikeUrl = (value: string) => {
+    if (!value || /\s/.test(value)) {
+      return false;
+    }
+
+    if (value.startsWith("http://") || value.startsWith("https://")) {
+      try {
+        new URL(value);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    const localhostPattern = /^localhost(?::\d+)?(?:[/?#].*)?$/i;
+    const ipv4Pattern = /^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:[/?#].*)?$/;
+    const domainPattern =
+      /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:[/?#].*)?$/i;
+
+    return (
+      localhostPattern.test(value) ||
+      ipv4Pattern.test(value) ||
+      domainPattern.test(value)
+    );
+  };
+
+  const handleSearchSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const query = searchQuery.trim();
+    if (!query) {
+      return;
+    }
+
+    if (looksLikeUrl(query)) {
+      const destination =
+        query.startsWith("http://") || query.startsWith("https://")
+          ? query
+          : `https://${query}`;
+      window.location.href = destination;
+      return;
+    }
+
+    const selectedSearchEngine = SEARCH_ENGINE_OPTIONS.find(
+      (option) => option.key === settings.searchEngine,
+    );
+    const searchUrl =
+      selectedSearchEngine?.searchUrl || "https://www.google.com/search?q=";
+    window.location.href = `${searchUrl}${encodeURIComponent(query)}`;
+  };
+
+  const updateUserSettings = async (patch: Partial<UserSettings>) => {
+    const previousSettings = settings;
+    const nextSettings = {
+      ...settings,
+      ...patch,
+    };
+
+    setSettings(nextSettings);
+
+    try {
+      const response = await fetch(`${baseUrl}/api/user/settings`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: patch }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to update settings");
+      }
+
+      const data = await response.json();
+      const normalized = normalizeSettings(data.settings);
+      setSettings(normalized);
+      setUser((currentUser) =>
+        currentUser
+          ? {
+              ...currentUser,
+              settings: data.settings,
+            }
+          : currentUser,
+      );
+    } catch (error) {
+      setSettings(previousSettings);
+      console.error("Failed to update settings:", error);
+    }
+  };
+
+  const activeSearchEngine =
+    SEARCH_ENGINE_OPTIONS.find(
+      (option) => option.key === settings.searchEngine,
+    ) || SEARCH_ENGINE_OPTIONS.find((option) => option.key === "google")!;
+
+  const activeBackground =
+    BACKGROUND_OPTIONS.find((option) => option.key === settings.background) ||
+    BACKGROUND_OPTIONS.find((option) => option.key === "purple")!;
+
+  const isDarkMode = settings.theme === "dark";
+  const modalSurfaceClass = isDarkMode
+    ? "bg-slate-900 text-slate-100"
+    : "bg-white text-gray-900";
+  const modalSubtleTextClass = isDarkMode ? "text-slate-300" : "text-gray-600";
+  const modalMutedBgClass = isDarkMode ? "bg-slate-800" : "bg-gray-50";
+  const modalBorderClass = isDarkMode ? "border-slate-700" : "border-gray-200";
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+      <div
+        className={`min-h-screen bg-gradient-to-br ${activeBackground.className} flex items-center justify-center`}
+      >
         <div className="text-xl text-white">Loading...</div>
       </div>
     );
@@ -490,7 +731,9 @@ function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+      <div
+        className={`min-h-screen bg-gradient-to-br ${activeBackground.className} flex items-center justify-center`}
+      >
         <div className="text-center">
           <h1 className="text-5xl font-bold text-white mb-8">
             Welcome to Your Homepage
@@ -510,10 +753,12 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+    <div
+      className={`min-h-screen bg-gradient-to-br ${activeBackground.className}`}
+    >
       <div className="px-4 py-8">
         {/* Header */}
-        <header className="flex justify-between items-center mb-12 relative">
+        <header className="grid grid-cols-[auto_1fr_auto] items-center gap-6 mb-12 relative">
           {/* Group Selector */}
           <div className="flex items-center gap-2">
             <select
@@ -546,39 +791,25 @@ function App() {
               className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 transition-colors flex items-center justify-center"
               title="Manage Groups"
             >
-              <svg
-                className="w-5 h-5 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-              </svg>
+              <Settings className="w-5 h-5 text-white" />
             </button>
           </div>
 
-          <div className="flex items-center gap-4">
-            {user.picture && (
-              <img
-                src={user.picture}
-                alt={user.name || ""}
-                className="w-10 h-10 rounded-full object-cover"
-                onError={(e) => {
-                  e.currentTarget.style.display = "none";
-                }}
-              />
-            )}
+          <form
+            onSubmit={handleSearchSubmit}
+            className="w-full max-w-4xl mx-auto"
+          >
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={`Search ${activeSearchEngine.label} or type a URL`}
+              autoFocus
+              className="w-full px-5 py-2.5 rounded-lg bg-white/10 text-white placeholder-white/70 border border-white/20 hover:bg-white/12 focus:outline-none focus:ring-1 focus:ring-purple-300/40 focus:border-purple-300/40 focus:bg-white/12 transition-[background-color,border-color,box-shadow] duration-400 ease-out"
+            />
+          </form>
+
+          <div className="flex items-center gap-4 justify-self-end">
             <span className="text-white">{user.name}</span>
             <div className="relative">
               <button
@@ -586,23 +817,43 @@ function App() {
                   e.stopPropagation();
                   setShowUserMenu(!showUserMenu);
                 }}
-                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 transition-colors flex items-center justify-center"
+                className="group relative w-10 h-10 rounded-full bg-white/10 hover:bg-white/15 transition-[background-color] duration-300 ease-out flex items-center justify-center overflow-hidden focus:outline-none focus:ring-1 focus:ring-purple-300/40"
               >
-                <svg
-                  className="w-5 h-5 text-white"
-                  fill="currentColor"
-                  viewBox="0 0 16 16"
-                >
-                  <circle cx="8" cy="2.5" r="1.5" />
-                  <circle cx="8" cy="8" r="1.5" />
-                  <circle cx="8" cy="13.5" r="1.5" />
-                </svg>
+                <div className="absolute inset-0 flex items-center justify-center transition-opacity duration-300 ease-out group-hover:opacity-0">
+                  {user.picture ? (
+                    <img
+                      src={user.picture}
+                      alt={user.name || ""}
+                      className="w-10 h-10 rounded-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                      }}
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-white/20 text-white font-medium flex items-center justify-center">
+                      {(user.name || "U").charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                </div>
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-300 ease-out group-hover:opacity-100">
+                  <Menu className="w-5 h-5 text-white" />
+                </div>
               </button>
               {showUserMenu && (
                 <div
                   className="absolute right-0 mt-2 bg-white rounded-lg shadow-xl py-2 z-50"
                   onClick={(e) => e.stopPropagation()}
                 >
+                  <button
+                    onClick={() => {
+                      setShowSettingsModal(true);
+                      setShowUserMenu(false);
+                    }}
+                    className="w-full px-4 py-2 text-left hover:bg-gray-100 transition-colors whitespace-nowrap flex items-center gap-2"
+                  >
+                    <Settings className="w-4 h-4 text-gray-600" />
+                    <span>Settings</span>
+                  </button>
                   {user?.isAdmin && (
                     <button
                       onClick={() => {
@@ -610,16 +861,18 @@ function App() {
                         setShowUserMenu(false);
                         fetchAllowedEmails();
                       }}
-                      className="w-full px-4 py-2 text-left hover:bg-gray-100 transition-colors whitespace-nowrap"
+                      className="w-full px-4 py-2 text-left hover:bg-gray-100 transition-colors whitespace-nowrap flex items-center gap-2"
                     >
-                      Manage Users
+                      <User className="w-4 h-4 text-gray-600" />
+                      <span>Manage Users</span>
                     </button>
                   )}
                   <button
                     onClick={handleLogout}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-100 transition-colors whitespace-nowrap"
+                    className="w-full px-4 py-2 text-left hover:bg-gray-100 transition-colors whitespace-nowrap flex items-center gap-2"
                   >
-                    Logout
+                    <LogOut className="w-4 h-4 text-gray-600" />
+                    <span>Logout</span>
                   </button>
                 </div>
               )}
@@ -680,19 +933,7 @@ function App() {
             className="group relative bg-white/10 backdrop-blur-sm rounded-2xl p-6 cursor-pointer hover:bg-white/20 transition-all hover:scale-105 hover:shadow-2xl border-2 border-dashed border-white/30"
           >
             <div className="aspect-square flex items-center justify-center mb-3">
-              <svg
-                className="w-16 h-16 text-white/50 group-hover:text-white/80 transition-colors"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 4v16m8-8H4"
-                />
-              </svg>
+              <Plus className="w-16 h-16 text-white/50 group-hover:text-white/80 transition-colors" />
             </div>
             <h3 className="text-white/70 text-center font-medium group-hover:text-white/90">
               Add Bookmark
@@ -725,37 +966,40 @@ function App() {
                 className="w-full px-6 py-2 text-left hover:bg-gray-100 transition-colors flex items-center justify-between"
               >
                 <span>Move To</span>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
+                <ChevronRight className="w-4 h-4" />
               </button>
               {showMoveToSubmenu && (
                 <div className="absolute left-full top-0 ml-1 bg-white rounded-lg shadow-xl py-2 min-w-[150px]">
-                  {groups.filter(g => g.id !== contextMenu.bookmark.groupId).map(group => (
-                    <button
-                      key={group.id}
-                      onClick={async () => {
-                        try {
-                          const response = await fetch(`${baseUrl}/api/bookmarks/${contextMenu.bookmark.id}/move`, {
-                            method: 'PATCH',
-                            credentials: 'include',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ groupId: group.id })
-                          });
-                          if (response.ok) {
-                            fetchBookmarks();
-                            setContextMenu(null);
-                            setShowMoveToSubmenu(false);
+                  {groups
+                    .filter((g) => g.id !== contextMenu.bookmark.groupId)
+                    .map((group) => (
+                      <button
+                        key={group.id}
+                        onClick={async () => {
+                          try {
+                            const response = await fetch(
+                              `${baseUrl}/api/bookmarks/${contextMenu.bookmark.id}/move`,
+                              {
+                                method: "PATCH",
+                                credentials: "include",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ groupId: group.id }),
+                              },
+                            );
+                            if (response.ok) {
+                              fetchBookmarks();
+                              setContextMenu(null);
+                              setShowMoveToSubmenu(false);
+                            }
+                          } catch (error) {
+                            console.error("Failed to move bookmark:", error);
                           }
-                        } catch (error) {
-                          console.error('Failed to move bookmark:', error);
-                        }
-                      }}
-                      className="w-full px-6 py-2 text-left hover:bg-gray-100 transition-colors"
-                    >
-                      {group.name}
-                    </button>
-                  ))}
+                        }}
+                        className="w-full px-6 py-2 text-left hover:bg-gray-100 transition-colors"
+                      >
+                        {group.name}
+                      </button>
+                    ))}
                 </div>
               )}
             </div>
@@ -774,7 +1018,9 @@ function App() {
         {/* Modal */}
         {showModal && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
+            <div
+              className={`${modalSurfaceClass} rounded-2xl p-8 max-w-md w-full shadow-2xl`}
+            >
               <h2 className="text-2xl font-bold mb-6">
                 {editingBookmark ? "Edit Bookmark" : "Add Bookmark"}
               </h2>
@@ -827,7 +1073,10 @@ function App() {
                     {imagePreview ? "Change Image" : "Upload Image"}
                   </button>
                   {imagePreview && (
-                    <div className="mt-4 flex items-center justify-center bg-gray-50 rounded-lg" style={{ height: '200px' }}>
+                    <div
+                      className="mt-4 flex items-center justify-center bg-gray-50 rounded-lg"
+                      style={{ height: "200px" }}
+                    >
                       <img
                         src={imagePreview}
                         alt="Preview"
@@ -852,10 +1101,7 @@ function App() {
                   >
                     {isSaving ? (
                       <>
-                        <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
+                        <LoaderCircle className="animate-spin h-5 w-5 text-white" />
                         <span>Saving...</span>
                       </>
                     ) : (
@@ -871,7 +1117,9 @@ function App() {
         {/* New Group Modal */}
         {showGroupModal && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
+            <div
+              className={`${modalSurfaceClass} rounded-2xl p-8 max-w-md w-full shadow-2xl`}
+            >
               <h2 className="text-2xl font-bold mb-6">Create New Group</h2>
               <form onSubmit={handleCreateGroup} className="space-y-4">
                 <div>
@@ -914,7 +1162,9 @@ function App() {
         {/* Manage Groups Modal */}
         {showManageGroupsModal && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
+            <div
+              className={`${modalSurfaceClass} rounded-2xl p-8 max-w-md w-full shadow-2xl`}
+            >
               <h2 className="text-2xl font-bold mb-6">Manage Groups</h2>
               <div className="space-y-3 max-h-96 overflow-y-auto">
                 {groups.map((group) => (
@@ -1003,11 +1253,11 @@ function App() {
         {/* Manage Users Modal (Admin only) */}
         {showManageUsersModal && user?.isAdmin && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] overflow-y-auto">
+            <div
+              className={`${modalSurfaceClass} rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] overflow-y-auto`}
+            >
               <div className="p-6">
-                <h2 className="text-2xl font-bold text-gray-800 mb-4">
-                  Manage Users
-                </h2>
+                <h2 className="text-2xl font-bold mb-4">Manage Users</h2>
 
                 {/* Add New Email */}
                 <div className="mb-6">
@@ -1082,6 +1332,140 @@ function App() {
           </div>
         )}
 
+        {/* Settings Modal */}
+        {showSettingsModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div
+              className={`${modalSurfaceClass} rounded-2xl p-8 max-w-2xl w-full shadow-2xl`}
+            >
+              <div className="flex items-center gap-2 mb-6">
+                <Settings className="w-5 h-5" />
+                <h2 className="text-2xl font-bold">Settings</h2>
+              </div>
+
+              <div className="space-y-8">
+                <div>
+                  <h3 className="text-sm font-semibold mb-3">Search Engine</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {SEARCH_ENGINE_OPTIONS.map((option) => {
+                      const isActive = settings.searchEngine === option.key;
+                      return (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() => {
+                            if (settings.searchEngine !== option.key) {
+                              updateUserSettings({ searchEngine: option.key });
+                            }
+                          }}
+                          className={`px-3 py-2 rounded-lg border transition-colors flex items-center gap-2 ${
+                            isActive
+                              ? "bg-purple-600 text-white border-purple-500"
+                              : `${modalMutedBgClass} ${modalSubtleTextClass} ${modalBorderClass} hover:bg-purple-100/40`
+                          }`}
+                        >
+                          <img
+                            src={option.favicon}
+                            alt={`${option.label} favicon`}
+                            className="w-4 h-4 rounded-sm"
+                          />
+                          <span>{option.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold mb-3">Theme</h3>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (settings.theme !== "light") {
+                          updateUserSettings({ theme: "light" });
+                        }
+                      }}
+                      className={`px-4 py-2 rounded-lg border transition-colors flex items-center gap-2 ${
+                        settings.theme === "light"
+                          ? "bg-purple-600 text-white border-purple-500"
+                          : `${modalMutedBgClass} ${modalSubtleTextClass} ${modalBorderClass}`
+                      }`}
+                    >
+                      <Sun className="w-4 h-4" />
+                      <span>Light</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (settings.theme !== "dark") {
+                          updateUserSettings({ theme: "dark" });
+                        }
+                      }}
+                      className={`px-4 py-2 rounded-lg border transition-colors flex items-center gap-2 ${
+                        settings.theme === "dark"
+                          ? "bg-purple-600 text-white border-purple-500"
+                          : `${modalMutedBgClass} ${modalSubtleTextClass} ${modalBorderClass}`
+                      }`}
+                    >
+                      <Moon className="w-4 h-4" />
+                      <span>Dark</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Palette className="w-4 h-4" />
+                    <h3 className="text-sm font-semibold">Background</h3>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    {BACKGROUND_OPTIONS.map((option) => {
+                      const isActive = settings.background === option.key;
+                      return (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() => {
+                            if (settings.background !== option.key) {
+                              updateUserSettings({ background: option.key });
+                            }
+                          }}
+                          className={`rounded-md border transition-all ${
+                            isActive
+                              ? "border-purple-400 ring-2 ring-purple-300/60"
+                              : isDarkMode
+                                ? "border-slate-600"
+                                : "border-gray-300"
+                          }`}
+                          title={option.label}
+                        >
+                          <div
+                            className={`w-[75px] h-[50px] rounded-[5px] bg-gradient-to-br ${option.className}`}
+                          />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-8">
+                <button
+                  onClick={() => setShowSettingsModal(false)}
+                  className={`px-4 py-2 rounded-lg transition-colors ${
+                    isDarkMode
+                      ? "bg-slate-700 text-slate-100 hover:bg-slate-600"
+                      : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+                  }`}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Toast Notification */}
         {toast && (
           <div className="fixed bottom-6 right-6 bg-white rounded-lg shadow-2xl p-4 flex items-center gap-3 z-50 animate-slide-in">
@@ -1099,10 +1483,14 @@ function App() {
               }}
               className="text-gray-400 hover:text-gray-600 transition-colors ml-2"
             >
-              ✕
+              <X className="w-4 h-4" />
             </button>
           </div>
         )}
+
+        <div className="fixed bottom-2 right-3 text-[10px] text-white/25 z-40 pointer-events-none select-none">
+          home-page v{__APP_VERSION__}
+        </div>
       </div>
     </div>
   );

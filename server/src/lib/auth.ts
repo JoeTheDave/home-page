@@ -29,6 +29,14 @@ passport.use(
         // Find or create user based on Google profile
         let user = await prisma.user.findUnique({
           where: { googleId: profile.id },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            picture: true,
+            isAdmin: true,
+            googleId: true,
+          },
         });
 
         if (!user) {
@@ -72,6 +80,14 @@ passport.deserializeUser(async (id: string, done) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        picture: true,
+        isAdmin: true,
+        googleId: true,
+      },
     });
     done(null, user);
   } catch (error) {
