@@ -56,5 +56,8 @@ Thumbs.db
 *.tmp
 *.temp
 
+# Specs (managed locally, not committed)
+.specs/
+
 # Uploaded files
 uploads/
