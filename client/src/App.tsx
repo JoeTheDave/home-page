@@ -20,7 +20,7 @@ import FitText from "./FitText";
 import type { LibraryImage } from "./ImageLibrary";
 import { rasterizeToPng } from "./lib/rasterize";
 
-// The icon maker pulls in the whole Lucide set — only load it when it's opened.
+// The icon maker and library are modal-only — load them when they are opened.
 const IconMaker = lazy(() => import("./IconMaker"));
 const ImageLibrary = lazy(() => import("./ImageLibrary"));
 
@@ -222,6 +222,17 @@ function App() {
   }>({ loading: false, error: "" });
   const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const longPress = useRef<{
+    timer: number;
+    x: number;
+    y: number;
+    fired: boolean;
+  } | null>(null);
+  // Touch devices (iPad) get a long press instead of right-click, and no HTML5 drag — iPadOS
+  // would otherwise start a drag on the same press.
+  const isTouchDevice =
+    typeof window !== "undefined" &&
+    window.matchMedia("(pointer: coarse)").matches;
 
   const baseUrl = import.meta.env.DEV ? "http://localhost:3001" : "";
 
@@ -509,9 +520,68 @@ function App() {
     }
   };
 
+  // The menu is position:fixed, so place it by viewport coordinates and keep it (plus the
+  // Move To submenu that opens to its right) on screen.
+  const openContextMenu = (x: number, y: number, bookmark: Bookmark) => {
+    setShowMoveToSubmenu(false);
+    setContextMenu({
+      x: Math.max(8, Math.min(x, window.innerWidth - 320)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 160)),
+      bookmark,
+    });
+  };
+
   const handleContextMenu = (e: React.MouseEvent, bookmark: Bookmark) => {
     e.preventDefault();
-    setContextMenu({ x: e.pageX, y: e.pageY, bookmark });
+    openContextMenu(e.clientX, e.clientY, bookmark);
+  };
+
+  const LONG_PRESS_MS = 500;
+  const LONG_PRESS_SLOP_PX = 10;
+
+  const cancelLongPress = () => {
+    if (longPress.current) {
+      window.clearTimeout(longPress.current.timer);
+    }
+  };
+
+  const handleTouchStart = (e: React.TouchEvent, bookmark: Bookmark) => {
+    cancelLongPress();
+    const touch = e.touches[0];
+    const state = {
+      x: touch.clientX,
+      y: touch.clientY,
+      fired: false,
+      timer: 0,
+    };
+    state.timer = window.setTimeout(() => {
+      state.fired = true;
+      openContextMenu(state.x, state.y, bookmark);
+    }, LONG_PRESS_MS);
+    longPress.current = state;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    const state = longPress.current;
+    if (!state || state.fired) return;
+    const touch = e.touches[0];
+    if (
+      Math.abs(touch.clientX - state.x) > LONG_PRESS_SLOP_PX ||
+      Math.abs(touch.clientY - state.y) > LONG_PRESS_SLOP_PX
+    ) {
+      cancelLongPress();
+      longPress.current = null;
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    cancelLongPress();
+    // Swallow the click that follows a long press so it doesn't open the bookmark
+    // (or immediately close the menu it just opened).
+    if (longPress.current?.fired) {
+      e.preventDefault();
+    }
+    longPress.current = null;
   };
 
   const handleCreateGroup = async (e: React.FormEvent) => {
@@ -968,7 +1038,11 @@ function App() {
           {bookmarks.map((bookmark, index) => (
             <div
               key={bookmark.id}
-              draggable
+              draggable={!isTouchDevice}
+              onTouchStart={(e) => handleTouchStart(e, bookmark)}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onTouchCancel={handleTouchEnd}
               onDragStart={(e) => handleDragStart(e, index)}
               onDragOver={(e) => handleDragOver(e, index)}
               onDragLeave={handleDragLeave}
@@ -976,7 +1050,8 @@ function App() {
               onDragEnd={handleDragEnd}
               onClick={() => handleBookmarkClick(bookmark.url)}
               onContextMenu={(e) => handleContextMenu(e, bookmark)}
-              className={`group relative bg-white/10 backdrop-blur-sm rounded-2xl p-6 cursor-pointer hover:bg-white/20 transition-all hover:scale-105 hover:shadow-2xl ${
+              style={{ WebkitTouchCallout: "none" }}
+              className={`group relative bg-white/10 backdrop-blur-sm rounded-2xl p-6 cursor-pointer hover:bg-white/20 transition-all hover:scale-105 hover:shadow-2xl select-none ${
                 dragOverIndex === index ? "ring-2 ring-purple-500" : ""
               } ${draggedIndex === index ? "opacity-50 cursor-move" : ""}`}
             >
@@ -989,7 +1064,8 @@ function App() {
                         : `${baseUrl}${bookmark.image}`
                     }
                     alt={bookmark.name}
-                    className="w-full h-full object-contain rounded-xl"
+                    draggable={false}
+                    className="w-full h-full object-contain rounded-xl pointer-events-none"
                   />
                 ) : (
                   <div className="w-full h-full bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center">
@@ -1022,6 +1098,17 @@ function App() {
         </div>
 
         {/* Context Menu */}
+        {/* iOS Safari doesn't deliver taps on empty page areas as document clicks, so on
+            touch devices a transparent backdrop closes the menu instead. */}
+        {contextMenu && isTouchDevice && (
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => {
+              setContextMenu(null);
+              setShowMoveToSubmenu(false);
+            }}
+          />
+        )}
         {contextMenu && (
           <div
             className="fixed bg-white rounded-lg shadow-xl py-2 z-50 min-w-[150px]"
