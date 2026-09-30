@@ -27,6 +27,7 @@ import passport from "./lib/auth.js";
 import { isAuthenticated } from "./lib/middleware.js";
 import { storeImage, touchImage, startImageSweep } from "./lib/images.js";
 import { fetchFavicon, normalizeSiteUrl } from "./lib/favicon.js";
+import { listSets, loadSet, renderIcons, searchIcons } from "./lib/icons.js";
 
 // Type definition for authenticated user
 interface AuthenticatedUser {
@@ -611,6 +612,35 @@ app.get("/api/favicon", isAuthenticated, async (req, res) => {
     console.error("Error fetching favicon:", error);
     res.status(502).json({ error: "Could not fetch an icon for that site" });
   }
+});
+
+// Icon picker (self-hosted icon sets)
+app.get("/api/icons/sets", isAuthenticated, (req, res) => {
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  res.json(listSets());
+});
+
+app.get("/api/icons/sets/:prefix", isAuthenticated, (req, res) => {
+  const set = loadSet(req.params.prefix);
+  if (!set) {
+    return res.status(404).json({ error: "Unknown icon set" });
+  }
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  res.json({ prefix: set.prefix, palette: set.palette, sections: set.sections });
+});
+
+app.get("/api/icons/search", isAuthenticated, (req, res) => {
+  const query = typeof req.query.q === "string" ? req.query.q.slice(0, 100) : "";
+  res.json(searchIcons(query));
+});
+
+app.get("/api/icons/svg", isAuthenticated, (req, res) => {
+  const ids =
+    typeof req.query.icons === "string"
+      ? req.query.icons.split(",").filter(Boolean).slice(0, 200)
+      : [];
+  res.setHeader("Cache-Control", "private, max-age=86400");
+  res.json(renderIcons(ids));
 });
 
 // Bookmark routes

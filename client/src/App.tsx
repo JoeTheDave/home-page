@@ -222,14 +222,26 @@ function App() {
   }>({ loading: false, error: "" });
   const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const longPress = useRef<{
-    timer: number;
+  // Touch press on a bookmark card (iPad): hold to lift it for dragging; keep holding still to
+  // open the context menu instead. See handleTouchStart.
+  const touchPress = useRef<{
+    phase: "pending" | "lifted" | "dragging" | "menu";
+    index: number;
+    bookmark: Bookmark;
+    startX: number;
+    startY: number;
     x: number;
     y: number;
-    fired: boolean;
+    overIndex: number | null;
+    liftTimer: number;
+    menuTimer: number;
   } | null>(null);
-  // Touch devices (iPad) get a long press instead of right-click, and no HTML5 drag — iPadOS
-  // would otherwise start a drag on the same press.
+  const [touchGhost, setTouchGhost] = useState<{
+    bookmark: Bookmark;
+    x: number;
+    y: number;
+  } | null>(null);
+  // Touch devices use the custom touch drag above instead of HTML5 drag-and-drop.
   const isTouchDevice =
     typeof window !== "undefined" &&
     window.matchMedia("(pointer: coarse)").matches;
@@ -536,52 +548,115 @@ function App() {
     openContextMenu(e.clientX, e.clientY, bookmark);
   };
 
-  const LONG_PRESS_MS = 500;
-  const LONG_PRESS_SLOP_PX = 10;
+  const TOUCH_LIFT_MS = 300;
+  const TOUCH_MENU_MS = 900;
+  const TOUCH_SLOP_PX = 10;
 
-  const cancelLongPress = () => {
-    if (longPress.current) {
-      window.clearTimeout(longPress.current.timer);
+  const clearTouchPress = () => {
+    const press = touchPress.current;
+    if (press) {
+      window.clearTimeout(press.liftTimer);
+      window.clearTimeout(press.menuTimer);
     }
+    touchPress.current = null;
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+    setTouchGhost(null);
   };
 
-  const handleTouchStart = (e: React.TouchEvent, bookmark: Bookmark) => {
-    cancelLongPress();
+  // Hold 300ms → the card lifts and follows your finger; drag it onto another card to reorder.
+  // Keep holding without moving until 900ms → the drag is dropped and the context menu opens.
+  const handleTouchStart = (
+    e: React.TouchEvent,
+    index: number,
+    bookmark: Bookmark,
+  ) => {
+    clearTouchPress();
     const touch = e.touches[0];
-    const state = {
+    const press = {
+      phase: "pending" as "pending" | "lifted" | "dragging" | "menu",
+      index,
+      bookmark,
+      startX: touch.clientX,
+      startY: touch.clientY,
       x: touch.clientX,
       y: touch.clientY,
-      fired: false,
-      timer: 0,
+      overIndex: null as number | null,
+      liftTimer: 0,
+      menuTimer: 0,
     };
-    state.timer = window.setTimeout(() => {
-      state.fired = true;
-      openContextMenu(state.x, state.y, bookmark);
-    }, LONG_PRESS_MS);
-    longPress.current = state;
+    touchPress.current = press;
+    press.liftTimer = window.setTimeout(() => {
+      if (touchPress.current !== press) return;
+      press.phase = "lifted";
+      setDraggedIndex(index);
+      setTouchGhost({ bookmark, x: press.x, y: press.y });
+    }, TOUCH_LIFT_MS);
+    press.menuTimer = window.setTimeout(() => {
+      if (touchPress.current !== press || press.phase !== "lifted") return;
+      press.phase = "menu";
+      setDraggedIndex(null);
+      setTouchGhost(null);
+      openContextMenu(press.x, press.y, bookmark);
+    }, TOUCH_MENU_MS);
   };
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    const state = longPress.current;
-    if (!state || state.fired) return;
-    const touch = e.touches[0];
-    if (
-      Math.abs(touch.clientX - state.x) > LONG_PRESS_SLOP_PX ||
-      Math.abs(touch.clientY - state.y) > LONG_PRESS_SLOP_PX
-    ) {
-      cancelLongPress();
-      longPress.current = null;
-    }
-  };
+  // Registered natively (non-passive) so a lifted card can stop the page from scrolling.
+  useEffect(() => {
+    const handleMove = (e: TouchEvent) => {
+      const press = touchPress.current;
+      if (!press || press.phase === "menu") return;
+      const touch = e.touches[0];
+      const moved =
+        Math.abs(touch.clientX - press.startX) > TOUCH_SLOP_PX ||
+        Math.abs(touch.clientY - press.startY) > TOUCH_SLOP_PX;
+
+      if (press.phase === "pending") {
+        // Moving before the lift is a scroll — let it happen.
+        if (moved) clearTouchPress();
+        return;
+      }
+
+      e.preventDefault();
+      press.x = touch.clientX;
+      press.y = touch.clientY;
+      if (press.phase === "lifted" && moved) {
+        press.phase = "dragging";
+        window.clearTimeout(press.menuTimer);
+      }
+      setTouchGhost({ bookmark: press.bookmark, x: press.x, y: press.y });
+      if (press.phase === "dragging") {
+        const target = document
+          .elementFromPoint(press.x, press.y)
+          ?.closest("[data-bookmark-index]");
+        const over = target
+          ? Number(target.getAttribute("data-bookmark-index"))
+          : null;
+        press.overIndex = over !== press.index ? over : null;
+        setDragOverIndex(press.overIndex);
+      }
+    };
+    document.addEventListener("touchmove", handleMove, { passive: false });
+    return () => document.removeEventListener("touchmove", handleMove);
+  }, []);
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    cancelLongPress();
-    // Swallow the click that follows a long press so it doesn't open the bookmark
-    // (or immediately close the menu it just opened).
-    if (longPress.current?.fired) {
-      e.preventDefault();
+    const press = touchPress.current;
+    if (!press) return;
+    const { phase, index, overIndex } = press;
+    clearTouchPress();
+    if (phase === "pending") return; // a plain tap — let the click open the bookmark
+    // Swallow the click that follows a hold so it doesn't open the bookmark
+    // (or immediately close the menu that just opened).
+    e.preventDefault();
+    if (phase === "dragging" && overIndex !== null) {
+      reorderBookmarks(index, overIndex);
     }
-    longPress.current = null;
+  };
+
+  const handleTouchCancel = () => {
+    if (touchPress.current?.phase !== "menu") clearTouchPress();
+    else touchPress.current = null;
   };
 
   const handleCreateGroup = async (e: React.FormEvent) => {
@@ -722,15 +797,18 @@ function App() {
       return;
     }
 
-    // Reorder bookmarks array
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+    await reorderBookmarks(draggedIndex, dropIndex);
+  };
+
+  const reorderBookmarks = async (fromIndex: number, toIndex: number) => {
     const newBookmarks = [...bookmarks];
-    const [draggedBookmark] = newBookmarks.splice(draggedIndex, 1);
-    newBookmarks.splice(dropIndex, 0, draggedBookmark);
+    const [draggedBookmark] = newBookmarks.splice(fromIndex, 1);
+    newBookmarks.splice(toIndex, 0, draggedBookmark);
 
     // Update local state immediately for smooth UX
     setBookmarks(newBookmarks);
-    setDraggedIndex(null);
-    setDragOverIndex(null);
 
     // Send new order to server
     try {
@@ -1039,10 +1117,10 @@ function App() {
             <div
               key={bookmark.id}
               draggable={!isTouchDevice}
-              onTouchStart={(e) => handleTouchStart(e, bookmark)}
-              onTouchMove={handleTouchMove}
+              data-bookmark-index={index}
+              onTouchStart={(e) => handleTouchStart(e, index, bookmark)}
               onTouchEnd={handleTouchEnd}
-              onTouchCancel={handleTouchEnd}
+              onTouchCancel={handleTouchCancel}
               onDragStart={(e) => handleDragStart(e, index)}
               onDragOver={(e) => handleDragOver(e, index)}
               onDragLeave={handleDragLeave}
@@ -1098,6 +1176,26 @@ function App() {
         </div>
 
         {/* Context Menu */}
+        {/* Card following the finger during an iPad touch drag */}
+        {touchGhost && (
+          <div
+            className="fixed z-50 pointer-events-none w-28 h-28 rounded-2xl bg-white/20 backdrop-blur-sm shadow-2xl p-3 scale-110"
+            style={{ left: touchGhost.x - 56, top: touchGhost.y - 56 }}
+          >
+            {touchGhost.bookmark.image ? (
+              <img
+                src={touchGhost.bookmark.image}
+                alt=""
+                className="w-full h-full object-contain rounded-xl"
+              />
+            ) : (
+              <div className="w-full h-full bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center text-3xl text-white font-bold">
+                {touchGhost.bookmark.name.charAt(0).toUpperCase()}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* iOS Safari doesn't deliver taps on empty page areas as document clicks, so on
             touch devices a transparent backdrop closes the menu instead. */}
         {contextMenu && isTouchDevice && (
@@ -1332,6 +1430,7 @@ function App() {
           >
             {imagePicker === "icon" ? (
               <IconMaker
+                baseUrl={baseUrl}
                 surfaceClass={modalSurfaceClass}
                 onDone={handleIconCreated}
                 onCancel={() => setImagePicker(null)}
