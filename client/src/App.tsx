@@ -1,6 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
   ChevronRight,
+  Globe,
+  Images,
+  Shapes,
+  Upload,
   LoaderCircle,
   LogOut,
   Menu,
@@ -12,6 +16,13 @@ import {
   User,
   X,
 } from "lucide-react";
+import FitText from "./FitText";
+import type { LibraryImage } from "./ImageLibrary";
+import { rasterizeToPng } from "./lib/rasterize";
+
+// The icon maker pulls in the whole Lucide set — only load it when it's opened.
+const IconMaker = lazy(() => import("./IconMaker"));
+const ImageLibrary = lazy(() => import("./ImageLibrary"));
 
 interface User {
   id: string;
@@ -38,6 +49,7 @@ interface UserSettings {
   searchEngine: SearchEngine;
   theme: ThemeMode;
   background: BackgroundTheme;
+  lastGroupId?: string;
 }
 
 const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -198,8 +210,16 @@ function App() {
     url: "",
     name: "",
     image: null as File | null,
+    imageId: null as string | null,
   });
   const [imagePreview, setImagePreview] = useState<string>("");
+  const [imagePicker, setImagePicker] = useState<"icon" | "library" | null>(
+    null,
+  );
+  const [faviconStatus, setFaviconStatus] = useState<{
+    loading: boolean;
+    error: string;
+  }>({ loading: false, error: "" });
   const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -218,6 +238,10 @@ function App() {
   useEffect(() => {
     if (selectedGroupId) {
       fetchBookmarks();
+      // Remember the active group so the next page load opens it.
+      if (selectedGroupId !== settings.lastGroupId) {
+        updateUserSettings({ lastGroupId: selectedGroupId });
+      }
     }
   }, [selectedGroupId]);
 
@@ -257,9 +281,13 @@ function App() {
       if (response.ok) {
         const data = await response.json();
         setGroups(data);
-        // Select first group by default
+        // Reopen the last active group, falling back to the first one
         if (data.length > 0 && !selectedGroupId) {
-          setSelectedGroupId(data[0].id);
+          const lastGroupId = user?.settings?.lastGroupId;
+          const lastGroup = data.find(
+            (group: BookmarkGroup) => group.id === lastGroupId,
+          );
+          setSelectedGroupId(lastGroup ? lastGroup.id : data[0].id);
         }
       }
     } catch (error) {
@@ -310,6 +338,7 @@ function App() {
         url: bookmark.url,
         name: bookmark.name,
         image: null,
+        imageId: null,
       });
       // Check if image URL is absolute (S3) or relative (local)
       const imageUrl = bookmark.image
@@ -320,29 +349,76 @@ function App() {
       setImagePreview(imageUrl);
     } else {
       setEditingBookmark(null);
-      setFormData({ url: "", name: "", image: null });
+      setFormData({ url: "", name: "", image: null, imageId: null });
       setImagePreview("");
     }
+    setFaviconStatus({ loading: false, error: "" });
     setShowModal(true);
   };
 
   const closeModal = () => {
     setShowModal(false);
     setEditingBookmark(null);
-    setFormData({ url: "", name: "", image: null });
+    setFormData({ url: "", name: "", image: null, imageId: null });
     setImagePreview("");
+    setImagePicker(null);
   };
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setFormData({ ...formData, image: file });
+      setFormData({ ...formData, image: file, imageId: null });
       const reader = new FileReader();
       reader.onloadend = () => {
         setImagePreview(reader.result as string);
       };
       reader.readAsDataURL(file);
     }
+    e.target.value = "";
+  };
+
+  const handleFetchFavicon = async () => {
+    if (!formData.url.trim()) {
+      setFaviconStatus({ loading: false, error: "Enter the URL first" });
+      return;
+    }
+    setFaviconStatus({ loading: true, error: "" });
+    try {
+      const response = await fetch(
+        `${baseUrl}/api/favicon?url=${encodeURIComponent(formData.url)}`,
+        { credentials: "include" },
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "Could not fetch an icon");
+      }
+      const blobUrl = URL.createObjectURL(await response.blob());
+      try {
+        const file = await rasterizeToPng(blobUrl, "favicon.png");
+        setFormData((current) => ({ ...current, image: file, imageId: null }));
+        setImagePreview(URL.createObjectURL(file));
+      } finally {
+        URL.revokeObjectURL(blobUrl);
+      }
+      setFaviconStatus({ loading: false, error: "" });
+    } catch (error) {
+      setFaviconStatus({
+        loading: false,
+        error: error instanceof Error ? error.message : "Could not fetch an icon",
+      });
+    }
+  };
+
+  const handleIconCreated = (file: File, previewUrl: string) => {
+    setFormData((current) => ({ ...current, image: file, imageId: null }));
+    setImagePreview(previewUrl);
+    setImagePicker(null);
+  };
+
+  const handleLibraryPick = (image: LibraryImage) => {
+    setFormData((current) => ({ ...current, image: null, imageId: image.id }));
+    setImagePreview(image.url);
+    setImagePicker(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -357,6 +433,8 @@ function App() {
     }
     if (formData.image) {
       formDataToSend.append("image", formData.image);
+    } else if (formData.imageId) {
+      formDataToSend.append("imageId", formData.imageId);
     }
 
     try {
@@ -902,7 +980,7 @@ function App() {
                 dragOverIndex === index ? "ring-2 ring-purple-500" : ""
               } ${draggedIndex === index ? "opacity-50 cursor-move" : ""}`}
             >
-              <div className="aspect-square flex items-center justify-center mb-3">
+              <div className="aspect-square flex items-center justify-center">
                 {bookmark.image ? (
                   <img
                     src={
@@ -921,9 +999,11 @@ function App() {
                   </div>
                 )}
               </div>
-              <h3 className="text-white text-center font-medium truncate">
-                {bookmark.name}
-              </h3>
+              {/* h-9 = the old one-line title plus its top margin, so the card size is unchanged */}
+              <FitText
+                text={bookmark.name}
+                className="h-9 text-white font-medium"
+              />
             </div>
           ))}
 
@@ -1065,13 +1145,54 @@ function App() {
                     onChange={handleImageChange}
                     className="hidden"
                   />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full px-4 py-2 border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-500 transition-colors"
-                  >
-                    {imagePreview ? "Change Image" : "Upload Image"}
-                  </button>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      {
+                        label: "Upload",
+                        icon: Upload,
+                        onClick: () => fileInputRef.current?.click(),
+                      },
+                      {
+                        label: faviconStatus.loading
+                          ? "Fetching…"
+                          : "Fetch Favicon",
+                        icon: faviconStatus.loading ? LoaderCircle : Globe,
+                        onClick: handleFetchFavicon,
+                      },
+                      {
+                        label: "Create Icon",
+                        icon: Shapes,
+                        onClick: () => setImagePicker("icon"),
+                      },
+                      {
+                        label: "Choose Existing",
+                        icon: Images,
+                        onClick: () => setImagePicker("library"),
+                      },
+                    ].map(({ label, icon: Icon, onClick }) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={onClick}
+                        disabled={faviconStatus.loading}
+                        className="px-3 py-2 border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-500 transition-colors flex items-center justify-center gap-2 text-sm cursor-pointer disabled:cursor-default disabled:opacity-50 disabled:hover:border-gray-300"
+                      >
+                        <Icon
+                          className={`w-4 h-4 ${
+                            faviconStatus.loading && Icon === LoaderCircle
+                              ? "animate-spin"
+                              : ""
+                          }`}
+                        />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {faviconStatus.error && (
+                    <p className="mt-2 text-sm text-red-500">
+                      {faviconStatus.error}
+                    </p>
+                  )}
                   {imagePreview && (
                     <div
                       className="mt-4 flex items-center justify-center bg-gray-50 rounded-lg"
@@ -1112,6 +1233,31 @@ function App() {
               </form>
             </div>
           </div>
+        )}
+
+        {showModal && imagePicker && (
+          <Suspense
+            fallback={
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+                <LoaderCircle className="animate-spin w-10 h-10 text-white" />
+              </div>
+            }
+          >
+            {imagePicker === "icon" ? (
+              <IconMaker
+                surfaceClass={modalSurfaceClass}
+                onDone={handleIconCreated}
+                onCancel={() => setImagePicker(null)}
+              />
+            ) : (
+              <ImageLibrary
+                baseUrl={baseUrl}
+                surfaceClass={modalSurfaceClass}
+                onPick={handleLibraryPick}
+                onCancel={() => setImagePicker(null)}
+              />
+            )}
+          </Suspense>
         )}
 
         {/* New Group Modal */}

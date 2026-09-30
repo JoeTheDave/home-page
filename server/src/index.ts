@@ -25,7 +25,8 @@ const __dirname = path.dirname(__filename);
 import prisma from "./lib/prisma.js";
 import passport from "./lib/auth.js";
 import { isAuthenticated } from "./lib/middleware.js";
-import { uploadToS3 } from "./lib/s3.js";
+import { storeImage, touchImage, startImageSweep } from "./lib/images.js";
+import { fetchFavicon, normalizeSiteUrl } from "./lib/favicon.js";
 
 // Type definition for authenticated user
 interface AuthenticatedUser {
@@ -53,6 +54,7 @@ interface UserSettings {
   searchEngine: SearchEngine;
   theme: ThemeMode;
   background: BackgroundTheme;
+  lastGroupId?: string;
 }
 
 const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -106,6 +108,13 @@ const sanitizeSettingsPatch = (value: unknown): Partial<UserSettings> => {
     BACKGROUNDS.has(value.background as BackgroundTheme)
   ) {
     patch.background = value.background as BackgroundTheme;
+  }
+
+  if (
+    typeof value.lastGroupId === "string" &&
+    /^[0-9a-f-]{36}$/i.test(value.lastGroupId)
+  ) {
+    patch.lastGroupId = value.lastGroupId;
   }
 
   return patch;
@@ -535,6 +544,75 @@ app.delete("/api/allowed-emails/:id", isAuthenticated, async (req, res) => {
   }
 });
 
+class BadImageError extends Error {}
+
+/**
+ * The image a create/update request asks for: an uploaded file (stored, de-duplicated by
+ * content), an existing library image by id, or undefined when the request doesn't set one.
+ */
+async function resolveRequestedImage(
+  req: express.Request,
+  user: AuthenticatedUser,
+  label: string,
+): Promise<string | undefined> {
+  if (req.file) {
+    return storeImage(
+      req.file.buffer,
+      req.file.mimetype,
+      req.file.originalname,
+      user,
+      label,
+    );
+  }
+  const { imageId } = req.body;
+  if (typeof imageId === "string" && imageId) {
+    const image = await prisma.image.findUnique({ where: { id: imageId } });
+    if (!image) {
+      throw new BadImageError("Selected image no longer exists");
+    }
+    await touchImage(image.url);
+    return image.url;
+  }
+  return undefined;
+}
+
+// Shared image library — every tracked image, across all users.
+app.get("/api/images", isAuthenticated, async (req, res) => {
+  try {
+    const images = await prisma.image.findMany({
+      select: { id: true, url: true, label: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(images);
+  } catch (error) {
+    console.error("Error fetching images:", error);
+    res.status(500).json({ error: "Failed to fetch images" });
+  }
+});
+
+// Fetch a site's favicon and proxy the bytes back (the client rasterises it to PNG).
+app.get("/api/favicon", isAuthenticated, async (req, res) => {
+  const siteUrl =
+    typeof req.query.url === "string" ? normalizeSiteUrl(req.query.url) : null;
+  if (!siteUrl) {
+    return res.status(400).json({ error: "A valid http(s) URL is required" });
+  }
+  try {
+    const icon = await fetchFavicon(siteUrl);
+    if (!icon) {
+      return res.status(404).json({ error: "No icon found for that site" });
+    }
+    res.setHeader("Content-Type", icon.contentType);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.send(icon.buffer);
+  } catch (error) {
+    console.error("Error fetching favicon:", error);
+    res.status(502).json({ error: "Could not fetch an icon for that site" });
+  }
+});
+
 // Bookmark routes
 app.get("/api/bookmarks", isAuthenticated, async (req, res) => {
   try {
@@ -574,17 +652,7 @@ app.post(
           .json({ error: "URL, name, and groupId are required" });
       }
 
-      // Upload image to S3 if provided
-      let image = "";
-      if (req.file) {
-        const result = await uploadToS3(
-          req.file.buffer,
-          req.file.mimetype,
-          req.file.originalname,
-          user.email,
-        );
-        image = result.url;
-      }
+      const image = (await resolveRequestedImage(req, user, name)) ?? "";
 
       // Get the highest orderId for this group and add 1
       const maxOrder = await prisma.bookmark.findFirst({
@@ -605,6 +673,9 @@ app.post(
       });
       res.status(201).json(bookmark);
     } catch (error) {
+      if (error instanceof BadImageError) {
+        return res.status(400).json({ error: error.message });
+      }
       console.error("Error creating bookmark:", error);
       res.status(500).json({ error: "Failed to create bookmark" });
     }
@@ -635,18 +706,9 @@ app.put(
         name,
       };
 
-      if (req.file) {
-        // Upload new image to S3
-        const result = await uploadToS3(
-          req.file.buffer,
-          req.file.mimetype,
-          req.file.originalname,
-          user.email,
-        );
-        updateData.image = result.url;
-
-        // Note: Old S3 images could be deleted here with deleteFromS3()
-        // but we'll keep them for simplicity (soft delete preserves them anyway)
+      const image = await resolveRequestedImage(req, user, name);
+      if (image !== undefined) {
+        updateData.image = image;
       }
 
       const bookmark = await prisma.bookmark.update({
@@ -654,8 +716,16 @@ app.put(
         data: updateData,
       });
 
+      // The old image is freed by the orphan sweep once no live bookmark uses it.
+      if (image !== undefined && image !== existingBookmark.image) {
+        await touchImage(existingBookmark.image);
+      }
+
       res.json(bookmark);
     } catch (error) {
+      if (error instanceof BadImageError) {
+        return res.status(400).json({ error: error.message });
+      }
       console.error("Error updating bookmark:", error);
       res.status(500).json({ error: "Failed to update bookmark" });
     }
@@ -676,11 +746,13 @@ app.delete("/api/bookmarks/:id", isAuthenticated, async (req, res) => {
       return res.status(404).json({ error: "Bookmark not found" });
     }
 
-    // Soft delete: mark as deleted
+    // Soft delete: mark as deleted. Touching the image restarts its grace period, so an
+    // Undo within that window still finds the S3 object.
     await prisma.bookmark.update({
       where: { id },
       data: { deleted: true },
     });
+    await touchImage(bookmark.image);
 
     res.json({ message: "Bookmark deleted successfully" });
   } catch (error) {
@@ -869,4 +941,5 @@ app.use(
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  startImageSweep();
 });

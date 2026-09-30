@@ -25,6 +25,7 @@ model User {
   updatedAt     DateTime        @updatedAt
   bookmarks     Bookmark[]
   groups        BookmarkGroup[]
+  images        Image[]
 }
 
 model BookmarkGroup {
@@ -57,6 +58,21 @@ model Bookmark {
 
   @@index([userId])
   @@index([groupId, deleted, orderId])
+}
+
+// One row per S3 object. Bookmarks reference an image by URL (Bookmark.image), so an image
+// can be shared across bookmarks and users; the orphan sweep deletes the object once no live
+// bookmark references it and lastTouchedAt is older than the grace period.
+model Image {
+  id            String   @id @default(uuid())
+  url           String   @unique
+  key           String   @unique
+  sha256        String?  @unique
+  label         String?
+  uploadedById  String?
+  uploadedBy    User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  lastTouchedAt DateTime @default(now())
+  createdAt     DateTime @default(now())
 }
 
 model AllowedEmail {
