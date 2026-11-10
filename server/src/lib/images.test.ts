@@ -7,6 +7,7 @@ import { ORPHAN_GRACE_MS, sweepOrphanImages } from "./images.js";
 
 const old = new Date(Date.now() - ORPHAN_GRACE_MS - 60_000);
 const created: string[] = [];
+const fixtureEmail = `sweep-${randomUUID()}@sweep.test`;
 
 async function makeImage(key: string, lastTouchedAt: Date) {
   const image = await prisma.image.create({
@@ -19,12 +20,13 @@ async function makeImage(key: string, lastTouchedAt: Date) {
 after(async () => {
   await prisma.bookmark.deleteMany({ where: { url: "https://sweep.test" } });
   await prisma.image.deleteMany({ where: { id: { in: created } } });
+  await prisma.user.deleteMany({ where: { email: fixtureEmail } });
   await prisma.$disconnect();
 });
 
 test("sweep removes only stale, unreferenced images under this env's prefix", async () => {
-  const group = await prisma.bookmarkGroup.findFirstOrThrow();
-  const user = { id: group.userId };
+  const user = await prisma.user.create({ data: { email: fixtureEmail } });
+  const group = await prisma.bookmarkGroup.create({ data: { name: "sweep", userId: user.id } });
   const tag = randomUUID();
 
   const orphan = await makeImage(`dev/t/${tag}-orphan.png`, old);

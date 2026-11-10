@@ -61,3 +61,6 @@ Thumbs.db
 
 # Uploaded files
 uploads/
+
+# Central Command access marker
+.last-accessed
